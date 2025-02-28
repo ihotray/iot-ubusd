@@ -22,9 +22,11 @@
 #include <iot/iot.h>
 #include "ubusd.h"
 
-/* Lua脚本路径定义 */
-#define LUA_IOT_RPC_SCRIPT "/www/iot/iot-rpc.lua"           /**< IoT RPC处理脚本 */
-#define LUA_CALLBACK_SCRIPT "/usr/share/iot/rpc/ubus/iot-ubusd.lua"  /**< 标准ubus调用处理脚本 */
+
+struct ubus_object_ext {
+    struct ubus_object obj;
+    void *priv;
+};
 
 /**
  * @brief 信号处理函数
@@ -47,11 +49,12 @@ static void signal_handler(int signo) {
  * 3. 调用脚本中的处理函数
  * 4. 获取处理结果并返回
  */
-static void do_handler(const char *object, const char *method, const char *param, struct mg_str *out) {
+static void do_handler(void *handle, const char *object, const char *method, const char *param, struct mg_str *out) {
     const char *response = NULL, *error_msg = NULL;
     bool rpc = false;
     int ret = 0;
-    const char *lua_path = LUA_CALLBACK_SCRIPT;
+    struct ubusd_private *priv = (struct ubusd_private *)handle;
+    const char *lua_path = priv->cfg.opts->lua_callback_script;
     const char *func = "call";
     cJSON *root = NULL;
     lua_State *L = NULL;
@@ -61,7 +64,7 @@ static void do_handler(const char *object, const char *method, const char *param
 
     if (strcmp(object, "iot-ubusd") == 0 && strcmp(method, "iot-rpc") == 0) {
         rpc = true;
-        lua_path = LUA_IOT_RPC_SCRIPT;
+        lua_path = priv->cfg.opts->lua_rpc_script;
     }
 
     if (luaL_dofile(L, lua_path)) {
@@ -142,6 +145,7 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
                     struct blob_attr *msg) {
     struct blob_buf bb;
     const char *response = NULL;
+    struct ubus_object_ext *obj_ext = container_of(obj, struct ubus_object_ext, obj);
 
     char *json_msg = blobmsg_format_json(msg, true);
 
@@ -150,7 +154,7 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
     struct mg_str out = {0};
 
     if (json_msg)
-        do_handler(obj->name, method, json_msg, &out);
+        do_handler(obj_ext->priv, obj->name, method, json_msg, &out);
 
     if (!out.ptr || out.len == 0) {
         response = "{\"code\": -1, \"msg\": \"no data\"}\n";
@@ -280,18 +284,22 @@ static int add_methods(struct ubus_object *obj, cJSON *method) {
  * 3. 向ubus注册对象
  */
 static int add_object(void *handle, const char *objname, int (*add_methods)(struct ubus_object *o, cJSON *method), cJSON *method) {
+    struct ubus_object_ext *obj_ext = NULL;
     struct ubus_object *obj = NULL;
     struct ubus_object_type *obj_type = NULL;
     struct ubusd_private *priv = (struct ubusd_private *)handle;
     struct ubus_context *ctx = priv->ubus_ctx;
 
-    obj = calloc(1, sizeof(struct ubus_object));
-    if (!obj)
+    obj_ext = calloc(1, sizeof(struct ubus_object_ext));
+    if (!obj_ext)
         return -ENOMEM;
+
+    obj_ext->priv = handle;
+    obj = &obj_ext->obj;
 
     obj_type = calloc(1, sizeof(struct ubus_object_type));
     if (!obj_type) {
-        free(obj);
+        free(obj_ext);
         return -ENOMEM;
     }
 

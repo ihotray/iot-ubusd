@@ -14,6 +14,8 @@
 struct ubusd_option {
     int debug_level;                  /**< 调试日志级别(0-4) */
     const char *ubus_obj_cfg_file;    /**< ubus对象配置文件路径 */
+    const char *lua_callback_script;  /**< Lua脚本路径 */
+    const char *lua_rpc_script;       /**< Lua RPC脚本路径 */
 };
 
 /**
