@@ -1,3 +1,14 @@
+/**
+ * @file ubusd.c
+ * @brief iot-ubusd的核心实现文件
+ * 
+ * 该文件实现了:
+ * 1. ubus对象和方法的动态注册
+ * 2. ubus请求的处理和转发
+ * 3. Lua回调脚本的调用
+ * 4. 错误处理和资源清理
+ */
+
 #include <libubox/blobmsg.h>
 #include <libubox/blobmsg_json.h>
 #include <libubox/uloop.h>
@@ -11,13 +22,31 @@
 #include <iot/iot.h>
 #include "ubusd.h"
 
-#define LUA_IOT_RPC_SCRIPT "/www/iot/iot-rpc.lua"
-#define LUA_CALLBACK_SCRIPT "/usr/share/iot/rpc/ubus/iot-ubusd.lua"
+/* Lua脚本路径定义 */
+#define LUA_IOT_RPC_SCRIPT "/www/iot/iot-rpc.lua"           /**< IoT RPC处理脚本 */
+#define LUA_CALLBACK_SCRIPT "/usr/share/iot/rpc/ubus/iot-ubusd.lua"  /**< 标准ubus调用处理脚本 */
 
+/**
+ * @brief 信号处理函数
+ * @param signo 信号编号
+ */
 static void signal_handler(int signo) {
     uloop_end();
 }
 
+/**
+ * @brief 处理ubus请求的核心函数
+ * @param object 对象名称
+ * @param method 方法名称
+ * @param param JSON格式的参数
+ * @param out 输出结果
+ * 
+ * 该函数主要完成:
+ * 1. 创建Lua虚拟机
+ * 2. 加载并执行对应的Lua脚本
+ * 3. 调用脚本中的处理函数
+ * 4. 获取处理结果并返回
+ */
 static void do_handler(const char *object, const char *method, const char *param, struct mg_str *out) {
     const char *response = NULL, *error_msg = NULL;
     bool rpc = false;
@@ -94,6 +123,20 @@ done:
     *out = mg_strdup(mg_str(response));
 }
 
+/**
+ * @brief ubus请求处理回调函数
+ * @param ctx ubus上下文
+ * @param obj ubus对象
+ * @param req 请求数据
+ * @param method 调用的方法名
+ * @param msg 请求参数
+ * @return 0表示成功,其他值表示失败
+ * 
+ * 该函数负责:
+ * 1. 将blob格式参数转换为JSON字符串
+ * 2. 调用do_handler处理请求
+ * 3. 将处理结果转换回blob格式并响应
+ */
 static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
                     struct ubus_request_data *req, const char *method,
                     struct blob_attr *msg) {
@@ -139,6 +182,11 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
         memcpy(&_tab[iter++], &___m, sizeof(struct ubus_method)); \
     } while (0)
 
+/**
+ * @brief 将字符串类型转换为blobmsg类型
+ * @param type 类型字符串
+ * @return blobmsg类型枚举值
+ */
 static int blogmsg_type(const char *type) {
     if (strcmp(type, "BLOBMSG_TYPE_STRING") == 0) {
         return BLOBMSG_TYPE_STRING;
@@ -157,6 +205,17 @@ static int blogmsg_type(const char *type) {
     }
 }
 
+/**
+ * @brief 向ubus对象添加方法
+ * @param obj ubus对象
+ * @param method JSON格式的方法定义
+ * @return 0表示成功,其他值表示失败
+ * 
+ * 该函数负责:
+ * 1. 解析JSON中的方法定义
+ * 2. 创建ubus_method结构
+ * 3. 设置方法的处理函数和参数策略
+ */
 static int add_methods(struct ubus_object *obj, cJSON *method) {
     int n_methods = 0;
     size_t n_ubus_methods = cJSON_GetArraySize(method);
@@ -207,6 +266,19 @@ static int add_methods(struct ubus_object *obj, cJSON *method) {
     return 0;
 }
 
+/**
+ * @brief 添加ubus对象
+ * @param handle 程序句柄
+ * @param objname 对象名称
+ * @param add_methods 添加方法的回调函数
+ * @param method JSON格式的方法定义
+ * @return 0表示成功,其他值表示失败
+ * 
+ * 该函数负责:
+ * 1. 创建ubus对象和类型结构
+ * 2. 调用add_methods添加方法
+ * 3. 向ubus注册对象
+ */
 static int add_object(void *handle, const char *objname, int (*add_methods)(struct ubus_object *o, cJSON *method), cJSON *method) {
     struct ubus_object *obj = NULL;
     struct ubus_object_type *obj_type = NULL;
@@ -235,6 +307,15 @@ static int add_object(void *handle, const char *objname, int (*add_methods)(stru
     return ubus_add_object(ctx, obj);
 }
 
+/**
+ * @brief 从配置文件加载并添加所有ubus对象
+ * @param handle 程序句柄
+ * 
+ * 该函数负责:
+ * 1. 读取JSON配置文件
+ * 2. 解析对象和方法定义
+ * 3. 调用add_object注册每个对象
+ */
 static void add_objects(void *handle) {
     struct ubusd_private *priv = (struct ubusd_private *)handle;
     size_t file_size = 0;
@@ -271,6 +352,18 @@ static void add_objects(void *handle) {
     }
 }
 
+/**
+ * @brief 初始化iot-ubusd服务
+ * @param priv 返回程序私有数据指针
+ * @param opts 配置选项
+ * @return 0表示成功,其他值表示失败
+ * 
+ * 该函数负责:
+ * 1. 初始化信号处理
+ * 2. 创建程序私有数据结构
+ * 3. 连接ubus
+ * 4. 加载并注册ubus对象
+ */
 int ubusd_init(void **priv, void *opts) {
 
     struct ubusd_private *p;
@@ -307,10 +400,24 @@ int ubusd_init(void **priv, void *opts) {
 
 }
 
+/**
+ * @brief 运行iot-ubusd服务主循环
+ * 
+ * 启动uloop事件循环,处理ubus请求
+ */
 void ubusd_run() {
     uloop_run();
 }
 
+/**
+ * @brief 清理并退出iot-ubusd服务
+ * @param handle 程序句柄
+ * 
+ * 该函数负责:
+ * 1. 释放ubus上下文
+ * 2. 释放JSON配置对象
+ * 3. 释放程序私有数据
+ */
 void ubusd_exit(void *handle) {
     struct ubusd_private *priv = (struct ubusd_private *)handle;
     ubus_free(priv->ubus_ctx);
@@ -320,6 +427,16 @@ void ubusd_exit(void *handle) {
     free(handle);
 }
 
+/**
+ * @brief iot-ubusd服务主函数
+ * @param user_options 用户配置选项
+ * @return 0表示成功,其他值表示失败
+ * 
+ * 该函数负责协调整个服务的:
+ * 1. 初始化
+ * 2. 运行
+ * 3. 退出清理
+ */
 int ubusd_main(void *user_options) {
 
     struct ubusd_option *opts = (struct ubusd_option *)user_options;
