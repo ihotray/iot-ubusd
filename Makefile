@@ -1,9 +1,9 @@
 PROG ?= iot-ubusd
-DEFS ?= -liot-base-nossl -liot-json -llua -lubus -lubox -lblobmsg_json
+DEFS ?= -liot-base-nossl -liot-json -lubus -lubox -lblobmsg_json -lpthread
 EXTRA_CFLAGS ?= -Wall -Werror
 CFLAGS += $(DEFS) $(EXTRA_CFLAGS)
 
-SRCS = main.c ubusd.c
+SRCS = main.c ubusd.c mqtt.c
 
 all: $(PROG)
 

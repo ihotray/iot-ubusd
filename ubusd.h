@@ -12,10 +12,16 @@
  * @brief 程序配置选项结构
  */
 struct ubusd_option {
-    int debug_level;                  /**< 调试日志级别(0-4) */
     const char *ubus_obj_cfg_file;    /**< ubus对象配置文件路径 */
-    const char *lua_callback_script;  /**< Lua脚本路径 */
-    const char *lua_rpc_script;       /**< Lua RPC脚本路径 */
+
+    const char *mqtt_serve_address;      //mqtt 服务端口
+    int mqtt_keepalive;                  //mqtt 保活间隔
+
+    const char *module;
+    const char *func;
+
+    int debug_level;                  /**< 调试日志级别(0-4) */
+
 };
 
 /**
@@ -32,7 +38,20 @@ struct ubusd_config {
 struct ubusd_private {
     struct ubusd_config cfg;      /**< 配置信息 */
     void *ubus_ctx;              /**< ubus上下文 */
+
+    struct mg_mgr mgr;
+    struct mg_connection *mqtt_conn;
+    uint64_t ping_active;
+    uint64_t pong_active;
+
     struct mg_fs *fs;            /**< mongoose文件系统操作接口 */
+
+    int signo;                  /**< 退出信号 */
+
+    volatile int request_full;   /**< 请求缓冲区是否已满 */
+    volatile int response_full;  /**< 响应缓冲区是否已满 */
+    char *request;     /**< 请求 */
+    char *response;    /**< 响应 */
 };
 
 /**

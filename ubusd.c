@@ -15,115 +15,25 @@
 #include <libubox/ustream.h>
 #include <libubox/utils.h>
 #include <libubus.h>
-#include <lualib.h>
-#include <lauxlib.h>
 #include <iot/mongoose.h>
 #include <iot/cJSON.h>
 #include <iot/iot.h>
 #include "ubusd.h"
-
 
 struct ubus_object_ext {
     struct ubus_object obj;
     void *priv;
 };
 
+static int *s_signo = NULL;
+
 /**
  * @brief 信号处理函数
  * @param signo 信号编号
  */
 static void signal_handler(int signo) {
+    *s_signo = signo;
     uloop_end();
-}
-
-/**
- * @brief 处理ubus请求的核心函数
- * @param object 对象名称
- * @param method 方法名称
- * @param param JSON格式的参数
- * @param out 输出结果
- * 
- * 该函数主要完成:
- * 1. 创建Lua虚拟机
- * 2. 加载并执行对应的Lua脚本
- * 3. 调用脚本中的处理函数
- * 4. 获取处理结果并返回
- */
-static void do_handler(void *handle, const char *object, const char *method, const char *param, struct mg_str *out) {
-    const char *response = NULL, *error_msg = NULL;
-    bool rpc = false;
-    int ret = 0;
-    struct ubusd_private *priv = (struct ubusd_private *)handle;
-    const char *lua_path = priv->cfg.opts->lua_callback_script;
-    const char *func = "call";
-    cJSON *root = NULL;
-    lua_State *L = NULL;
-
-    L = luaL_newstate();
-    luaL_openlibs(L);
-
-    if (strcmp(object, "iot-ubusd") == 0 && strcmp(method, "iot-rpc") == 0) {
-        rpc = true;
-        lua_path = priv->cfg.opts->lua_rpc_script;
-    }
-
-    if (luaL_dofile(L, lua_path)) {
-        MG_ERROR(("open lua file %s failed", lua_path));
-        error_msg = "{\"code\": -1, \"msg\": \"callback not found\"}\n";
-        goto done;
-    }
-
-    if (rpc) {
-        root = cJSON_Parse(param);
-        cJSON *obj = cJSON_GetObjectItem(root, "method");
-        if (cJSON_IsString(obj)) {
-            func = cJSON_GetStringValue(obj);
-        }
-    }
-
-    lua_getfield(L, -1, func);
-    if (!lua_isfunction(L, -1)) {
-        MG_ERROR(("method %s is not a function", "call"));
-        error_msg = "{\"code\": -1, \"msg\": \"method is unsupported\"}\n";
-        goto done;
-    }
-
-    if (!rpc) {
-        lua_pushstring(L, object);
-        lua_pushstring(L, method);
-    }
-    lua_pushstring(L, param);
-
-    if (rpc) {
-        ret = lua_pcall(L, 1, 1, 0); // one param, one return values, zero error func
-    } else {
-        ret = lua_pcall(L, 3, 1, 0); // three param, one return values, zero error func
-    }
-
-    if (ret) {
-        MG_ERROR(("lua call failed"));
-        error_msg = "{\"code\": -1, \"msg\": \"call failed\"}\n";
-        goto done;
-    }
-
-    response = lua_tostring(L, -1);
-    if (NULL == response) {
-        MG_ERROR(("lua call no response"));
-        error_msg = "{\"code\": -1, \"msg\": \"no response\"}\n";
-    }
-
-done:
-    if (!response)
-        response = error_msg;
-
-    if (root)
-        cJSON_Delete(root);
-
-    if (L)
-        lua_close(L);
-
-    //free by caller
-    *out = mg_strdup(mg_str(response));
 }
 
 /**
@@ -146,20 +56,62 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
     struct blob_buf bb;
     const char *response = NULL;
     struct ubus_object_ext *obj_ext = container_of(obj, struct ubus_object_ext, obj);
+    struct ubusd_private *priv = (struct ubusd_private *)obj_ext->priv;
 
     char *json_msg = blobmsg_format_json(msg, true);
 
     MG_DEBUG(("ubus call object: %s, method: %s, param: %s", obj->name, method, json_msg));
 
-    struct mg_str out = {0};
+    char *out = NULL;
 
-    if (json_msg)
-        do_handler(obj_ext->priv, obj->name, method, json_msg, &out);
+    if (json_msg) {
+        if (strcmp(obj->name, "iot-ubusd") != 0 || strcmp(method, "iot-rpc") != 0) { // not iot-rpc
+            cJSON *root = cJSON_CreateObject();
+            cJSON_AddStringToObject(root, FIELD_METHOD, "call");
 
-    if (!out.ptr || out.len == 0) {
+            cJSON *param = cJSON_CreateArray();
+            cJSON_AddItemToArray(param, cJSON_CreateString(priv->cfg.opts->module));
+            cJSON_AddItemToArray(param, cJSON_CreateString(priv->cfg.opts->func));
+
+            cJSON *args = cJSON_CreateObject();
+            cJSON_AddItemToObject(args, "object", cJSON_CreateString(obj->name));
+            cJSON_AddItemToObject(args, "method", cJSON_CreateString(method));
+            cJSON *data_obj = cJSON_Parse(json_msg);
+            cJSON_AddItemToObject(args, FIELD_DATA, data_obj);
+            cJSON_AddItemToArray(param, args);
+
+            cJSON_AddItemToObject(root, FIELD_PARAM, param);
+            free(json_msg);
+            json_msg = cJSON_Print(root);
+        }
+        while ( priv->request_full && priv->signo == 0 ) {
+            usleep(1000);
+        }
+
+        if ( !priv->request_full ) {
+            priv->request = strdup(json_msg);
+            __sync_synchronize();
+            priv->request_full = 1;
+        }
+
+        // TIMEOUT, 10S, 1000*10ms
+        int try = 0;
+        while ( !priv->response_full && try++ < 1000 && priv->signo == 0 ) {
+            usleep(10000);
+        }
+
+        if ( priv->response_full ) {
+            out = strdup(priv->response);
+            free(priv->response);
+            priv->response = NULL;
+            __sync_synchronize();
+            priv->response_full = 0;
+        }
+    }
+    if (!out) {
         response = "{\"code\": -1, \"msg\": \"no data\"}\n";
     } else {
-        response = out.ptr;
+        response = out;
     }
 
     memset(&bb, 0, sizeof(bb));
@@ -170,11 +122,11 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
     ubus_send_reply(ctx, req, bb.head);
     blob_buf_free(&bb);
 
-    if (out.ptr)
-        free((void*)out.ptr);
+    if (out)
+        free(out);
     
     if (json_msg)
-        free((void*)json_msg);
+        free(json_msg);
 
     return 0;
 }
@@ -360,6 +312,34 @@ static void add_objects(void *handle) {
     }
 }
 
+void start_thread(void *(*f)(void *), void *p) {
+#ifdef _WIN32
+#define usleep(x) Sleep((x) / 1000)
+    _beginthread((void(__cdecl *)(void *))f, 0, p);
+#else
+#include <pthread.h>
+    pthread_t thread_id = (pthread_t)0;
+    pthread_attr_t attr;
+    (void)pthread_attr_init(&attr);
+    (void)pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    pthread_create(&thread_id, &attr, f, p);
+    pthread_attr_destroy(&attr);
+#endif
+}
+
+void timer_mqtt_fn(void *arg);
+void *mgr_thread(void *param) {
+    struct ubusd_private *priv = (struct ubusd_private *)param;
+    int timer_opts = MG_TIMER_REPEAT | MG_TIMER_RUN_NOW;
+
+    mg_mgr_init(&priv->mgr);
+    priv->mgr.userdata = priv;
+    mg_timer_add(&priv->mgr, 2000, timer_opts, timer_mqtt_fn, &priv->mgr);
+    while (priv->signo == 0) mg_mgr_poll(&priv->mgr, 10);  // Event loop, 10ms timeout
+
+    return NULL;
+}
+
 /**
  * @brief 初始化iot-ubusd服务
  * @param priv 返回程序私有数据指针
@@ -377,13 +357,14 @@ int ubusd_init(void **priv, void *opts) {
     struct ubusd_private *p;
     struct ubus_context *ctx = NULL;
 
-    signal(SIGINT, signal_handler);   // Setup signal handlers - exist event
-    signal(SIGTERM, signal_handler);  // manager loop on SIGINT and SIGTERM
-
     *priv = NULL;
     p = calloc(1, sizeof(struct ubusd_private));
     if (!p)
         return -1;
+
+    s_signo = &p->signo;
+    signal(SIGINT, signal_handler);   // Setup signal handlers - exist event
+    signal(SIGTERM, signal_handler);  // manager loop on SIGINT and SIGTERM
 
     p->cfg.opts = opts;
     mg_log_set(p->cfg.opts->debug_level);
@@ -401,6 +382,9 @@ int ubusd_init(void **priv, void *opts) {
 
     // add ubus objects
     add_objects(p);
+
+    // start mgr thread
+    start_thread(mgr_thread, p);
 
     *priv = p;
 
@@ -432,6 +416,7 @@ void ubusd_exit(void *handle) {
     uloop_done();
     if (priv->cfg.ubus_object_json)
         cJSON_Delete(priv->cfg.ubus_object_json);
+
     free(handle);
 }
 
