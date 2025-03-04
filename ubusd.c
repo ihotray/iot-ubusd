@@ -124,7 +124,7 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
 
     if (out)
         free(out);
-    
+
     if (json_msg)
         free(json_msg);
 
@@ -312,7 +312,7 @@ static void add_objects(void *handle) {
     }
 }
 
-void start_thread(void *(*f)(void *), void *p) {
+static void start_thread(void *(*f)(void *), void *p) {
 #ifdef _WIN32
 #define usleep(x) Sleep((x) / 1000)
     _beginthread((void(__cdecl *)(void *))f, 0, p);
@@ -328,7 +328,7 @@ void start_thread(void *(*f)(void *), void *p) {
 }
 
 void timer_mqtt_fn(void *arg);
-void *mgr_thread(void *param) {
+static void *mgr_thread(void *param) {
     struct ubusd_private *priv = (struct ubusd_private *)param;
     int timer_opts = MG_TIMER_REPEAT | MG_TIMER_RUN_NOW;
 

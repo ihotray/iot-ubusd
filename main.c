@@ -31,7 +31,7 @@ static void usage(const char *prog, struct ubusd_option *default_opts) {
         "  -m PATH  - iot-ubusd lua callback script path, default: '%s'\n"
         "  -f NAME  - iot-ubusd lua callback script entrypoint, default: '%s'\n"
         "  -v LEVEL - debug level, from 0 to 4, default: %d\n",
-        MG_VERSION, prog, opts->mqtt_serve_address, opts->mqtt_keepalive, opts->ubus_obj_cfg_file, opts->module, opts->func,opts->debug_level);
+        MG_VERSION, prog, opts->mqtt_serve_address, opts->mqtt_keepalive, opts->ubus_obj_cfg_file, opts->module, opts->func, opts->debug_level);
 
     exit(EXIT_FAILURE);
 }
