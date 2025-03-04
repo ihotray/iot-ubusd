@@ -88,6 +88,13 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
             usleep(1000);
         }
 
+        if ( priv->response_full ) { // clear unhandled response
+            free(priv->response);
+            priv->response = NULL;
+            __sync_synchronize();
+            priv->response_full = 0;
+        }
+
         if ( !priv->request_full ) {
             priv->request = strdup(json_msg);
             __sync_synchronize();
