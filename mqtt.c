@@ -5,16 +5,16 @@
 #define IOT_UBUSD_PUB_TOPIC "mg/iot-ubusd/channel/iot-rpcd"
 #define IOT_UBUSD_SUB_TOPIC "mg/iot-ubusd/channel"
 
-static void mqtt_ev_open_cb(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
+static void mqtt_ev_open_cb(struct mg_connection *c, int ev, void *ev_data) {
     MG_INFO(("mqtt client connection created"));
 }
 
-static void mqtt_ev_error_cb(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
+static void mqtt_ev_error_cb(struct mg_connection *c, int ev, void *ev_data) {
     MG_ERROR(("%p %s", c->fd, (char *) ev_data));
     c->is_closing = 1;
 }
 
-static void mqtt_ev_poll_cb(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
+static void mqtt_ev_poll_cb(struct mg_connection *c, int ev, void *ev_data) {
 
     struct ubusd_private *priv = (struct ubusd_private*)c->mgr->userdata;
     if (!priv->cfg.opts->mqtt_keepalive) //no keepalive
@@ -43,7 +43,7 @@ static void mqtt_ev_poll_cb(struct mg_connection *c, int ev, void *ev_data, void
 
 }
 
-static void mqtt_ev_close_cb(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
+static void mqtt_ev_close_cb(struct mg_connection *c, int ev, void *ev_data) {
 
     struct ubusd_private *priv = (struct ubusd_private*)c->mgr->userdata;
     MG_INFO(("mqtt client connection closed"));
@@ -52,7 +52,7 @@ static void mqtt_ev_close_cb(struct mg_connection *c, int ev, void *ev_data, voi
 }
 
 
-static void mqtt_ev_mqtt_open_cb(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
+static void mqtt_ev_mqtt_open_cb(struct mg_connection *c, int ev, void *ev_data) {
 
     struct mg_str subt = mg_str(IOT_UBUSD_SUB_TOPIC);
 
@@ -63,11 +63,11 @@ static void mqtt_ev_mqtt_open_cb(struct mg_connection *c, int ev, void *ev_data,
     sub_opts.topic = subt;
     sub_opts.qos = MQTT_QOS;
     mg_mqtt_sub(c, &sub_opts);
-    MG_INFO(("subscribed to %.*s", (int) subt.len, subt.ptr));
+    MG_INFO(("subscribed to %.*s", (int) subt.len, subt.buf));
 
 }
 
-static void mqtt_ev_mqtt_cmd_cb(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
+static void mqtt_ev_mqtt_cmd_cb(struct mg_connection *c, int ev, void *ev_data) {
 
     struct mg_mqtt_message *mm = (struct mg_mqtt_message *) ev_data;
     struct ubusd_private *priv = (struct ubusd_private*)c->mgr->userdata;
@@ -77,51 +77,51 @@ static void mqtt_ev_mqtt_cmd_cb(struct mg_connection *c, int ev, void *ev_data, 
     }
 }
 
-static void mqtt_ev_mqtt_msg_cb(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
+static void mqtt_ev_mqtt_msg_cb(struct mg_connection *c, int ev, void *ev_data) {
 
     struct mg_mqtt_message *mm = (struct mg_mqtt_message *) ev_data;
     struct ubusd_private *priv = (struct ubusd_private*)c->mgr->userdata;
 
-    MG_DEBUG(("received %.*s <- %.*s", (int) mm->data.len, mm->data.ptr,
-        (int) mm->topic.len, mm->topic.ptr));
+    MG_DEBUG(("received %.*s <- %.*s", (int) mm->data.len, mm->data.buf,
+        (int) mm->topic.len, mm->topic.buf));
 
     // handle msg
     if ( !priv->response_full ) {
-        priv->response = mg_mprintf("%.*s", (int) mm->data.len, mm->data.ptr);
+        priv->response = mg_mprintf("%.*s", (int) mm->data.len, mm->data.buf);
         __sync_synchronize();
         priv->response_full = 1;
     }
 }
 
-static void mqtt_cb(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
+static void mqtt_cb(struct mg_connection *c, int ev, void *ev_data) {
 
     switch (ev) {
         case MG_EV_OPEN:
-            mqtt_ev_open_cb(c, ev, ev_data, fn_data);
+            mqtt_ev_open_cb(c, ev, ev_data);
             break;
 
         case MG_EV_ERROR:
-            mqtt_ev_error_cb(c, ev, ev_data, fn_data);
+            mqtt_ev_error_cb(c, ev, ev_data);
             break;
 
         case MG_EV_MQTT_OPEN:
-            mqtt_ev_mqtt_open_cb(c, ev, ev_data, fn_data);
+            mqtt_ev_mqtt_open_cb(c, ev, ev_data);
             break;
 
         case MG_EV_MQTT_CMD:
-            mqtt_ev_mqtt_cmd_cb(c, ev, ev_data, fn_data);
+            mqtt_ev_mqtt_cmd_cb(c, ev, ev_data);
             break;
 
         case MG_EV_MQTT_MSG:
-            mqtt_ev_mqtt_msg_cb(c, ev, ev_data, fn_data);
+            mqtt_ev_mqtt_msg_cb(c, ev, ev_data);
             break;
 
         case MG_EV_POLL:
-            mqtt_ev_poll_cb(c, ev, ev_data, fn_data);
+            mqtt_ev_poll_cb(c, ev, ev_data);
             break;
 
         case MG_EV_CLOSE:
-            mqtt_ev_close_cb(c, ev, ev_data, fn_data);
+            mqtt_ev_close_cb(c, ev, ev_data);
             break;
     }
 }

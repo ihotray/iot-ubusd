@@ -25,8 +25,8 @@ static void usage(const char *prog, struct ubusd_option *default_opts) {
     fprintf(stderr,
         "IoT-SDK v.%s\n"
         "Usage: %s OPTIONS\n"
-        "  -s ADDR   - local mqtt server address, default: '%s'\n"
-        "  -a n      - local mqtt keeplive, default: '%d'\n"
+        "  -s ADDR  - local mqtt server address, default: '%s'\n"
+        "  -a n     - local mqtt keeplive, default: '%d'\n"
         "  -c PATH  - ubusd object config, default: '%s'\n"
         "  -m PATH  - iot-ubusd lua callback script path, default: '%s'\n"
         "  -f NAME  - iot-ubusd lua callback script entrypoint, default: '%s'\n"
