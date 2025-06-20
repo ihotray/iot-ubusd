@@ -432,6 +432,7 @@ void ubusd_exit(void *handle) {
     uloop_done();
     if (priv->cfg.ubus_object_json)
         cJSON_Delete(priv->cfg.ubus_object_json);
+    mg_mgr_free(&priv->mgr);
     free(handle);
 }
 
