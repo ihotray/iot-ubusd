@@ -83,6 +83,7 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
             cJSON_AddItemToObject(root, FIELD_PARAM, param);
             free(json_msg);
             json_msg = cJSON_Print(root);
+            cJSON_Delete(root);
         }
         while ( priv->request_full && priv->signo == 0 ) {
             usleep(1000);
