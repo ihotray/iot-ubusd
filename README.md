@@ -3,7 +3,7 @@
 iot-ubusd 是一个基于ubus的RPC服务程序，它提供了一个灵活的对象和方法注册机制，支持通过JSON配置文件动态添加ubus对象。
 
 ## 重要
-- **禁止在ubus方法的响应实现代码中递归调用ubus接口
+- ~~**禁止在ubus方法的响应实现代码中递归调用ubus接口~~
 - 支持直接调用iot-rpcd实现的接口
 ```shell
 root@openwrt:~# ubus -t 1 call iot-ubusd iot-rpc '{ "method" : "is_inited", "param" : { "username": "admin"} }'
