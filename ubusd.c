@@ -176,7 +176,10 @@ send_reply:
  * @param type 类型字符串
  * @return blobmsg类型枚举值
  */
-static int blobmsg_type(const char *type) {
+static int blobmsg_type_from_string(const char *type) {
+    if (!type) {
+        return BLOBMSG_TYPE_UNSPEC;
+    }
     if (strcmp(type, "BLOBMSG_TYPE_STRING") == 0) {
         return BLOBMSG_TYPE_STRING;
     } else if (strcmp(type, "BLOBMSG_TYPE_INT32") == 0) {
@@ -234,7 +237,7 @@ static int add_methods(struct ubus_object *obj, cJSON *method) {
                 cJSON *type = cJSON_GetObjectItem(param_item, "type");
                 cJSON *name = cJSON_GetObjectItem(param_item, "name");
                 if (cJSON_IsString(type) && cJSON_IsString(name)) {
-                    policy[i].type = blobmsg_type(cJSON_GetStringValue(type));
+                    policy[i].type = blobmsg_type_from_string(cJSON_GetStringValue(type));
                     policy[i].name = cJSON_GetStringValue(name);
                 }
                 i++;
@@ -317,10 +320,15 @@ static void add_objects(void *handle) {
     size_t file_size = 0;
     priv->fs->st(priv->cfg.opts->ubus_obj_cfg_file, &file_size, NULL);
     size_t align_file_size = ((file_size + 1) / 64 + 1) * 64; //align 64 bytes
-    MG_INFO(("load config file: %s, size: %d(%d)", priv->cfg.opts->ubus_obj_cfg_file, file_size, align_file_size));
+    MG_INFO(("load config file: %s, size: %zu(%zu)", priv->cfg.opts->ubus_obj_cfg_file, file_size, align_file_size));
     void *fp = priv->fs->op(priv->cfg.opts->ubus_obj_cfg_file, MG_FS_READ);
     if (fp) {
         char *buf = calloc(1, align_file_size);
+        if (!buf) {
+            MG_ERROR(("memory allocation failed for config file buffer"));
+            priv->fs->cl(fp);
+            return;
+        }
         size_t size = priv->fs->rd(fp, buf, align_file_size - 1);
         cJSON *root = cJSON_ParseWithLength(buf, size);
         if (root && cJSON_IsArray(root)) {
@@ -329,7 +337,10 @@ static void add_objects(void *handle) {
                 cJSON *object = cJSON_GetObjectItem(item, "object");
                 cJSON *method = cJSON_GetObjectItem(item, "method");
                 if (object && cJSON_IsString(object) && method && cJSON_IsArray(method)) {
-                    add_object(handle, cJSON_GetStringValue(object), add_methods, method);
+                    int ret = add_object(handle, cJSON_GetStringValue(object), add_methods, method);
+                    if (ret != 0) {
+                        MG_ERROR(("failed to add object: %s, error: %d", cJSON_GetStringValue(object), ret));
+                    }
                 } else {
                     MG_ERROR(("config file %s format is wrong", priv->cfg.opts->ubus_obj_cfg_file));
                 }
@@ -448,8 +459,24 @@ void ubusd_run() {
  */
 void ubusd_exit(void *handle) {
     struct ubusd_private *priv = (struct ubusd_private *)handle;
+    
+    // Clean up any pending request/response buffers
+    if (priv->request) {
+        free(priv->request);
+        priv->request = NULL;
+    }
+    if (priv->response) {
+        free(priv->response);
+        priv->response = NULL;
+    }
+    
+    // Clean up mongoose manager
+    mg_mgr_free(&priv->mgr);
+    
+    // ubus_free() will clean up all registered objects and their associated memory
     ubus_free(priv->ubus_ctx);
     uloop_done();
+    
     if (priv->cfg.ubus_object_json)
         cJSON_Delete(priv->cfg.ubus_object_json);
 
