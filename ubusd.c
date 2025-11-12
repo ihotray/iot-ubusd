@@ -359,6 +359,14 @@ static void add_objects(void *handle) {
     }
 }
 
+/**
+ * @brief Start a detached thread
+ * @param f Thread function
+ * @param p Thread parameter
+ * 
+ * Note: Error handling for pthread_create is minimal.
+ * In production code, consider checking return values.
+ */
 static void start_thread(void *(*f)(void *), void *p) {
 #ifdef _WIN32
 #define usleep(x) Sleep((x) / 1000)
@@ -375,6 +383,14 @@ static void start_thread(void *(*f)(void *), void *p) {
 }
 
 void timer_mqtt_fn(void *arg);
+/**
+ * @brief Manager thread function for MQTT handling
+ * @param param Pointer to ubusd_private structure
+ * @return NULL
+ * 
+ * This thread runs the mongoose event loop for MQTT communication.
+ * It runs until signo is set by signal handler.
+ */
 static void *mgr_thread(void *param) {
     struct ubusd_private *priv = (struct ubusd_private *)param;
     int timer_opts = MG_TIMER_REPEAT | MG_TIMER_RUN_NOW;

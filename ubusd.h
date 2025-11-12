@@ -34,24 +34,27 @@ struct ubusd_config {
 
 /**
  * @brief 程序私有数据结构
+ * 
+ * 注意: request_full 和 response_full 使用 volatile 以确保在多线程
+ * 环境中的可见性。request 和 response 指针通过这些标志进行同步。
  */
 struct ubusd_private {
     struct ubusd_config cfg;      /**< 配置信息 */
     void *ubus_ctx;              /**< ubus上下文 */
 
-    struct mg_mgr mgr;
-    struct mg_connection *mqtt_conn;
-    uint64_t ping_active;
-    uint64_t pong_active;
+    struct mg_mgr mgr;           /**< mongoose 事件管理器 */
+    struct mg_connection *mqtt_conn;  /**< MQTT 连接 */
+    uint64_t ping_active;        /**< 上次发送 PING 的时间戳 */
+    uint64_t pong_active;        /**< 上次接收 PONG 的时间戳 */
 
     struct mg_fs *fs;            /**< mongoose文件系统操作接口 */
 
     int signo;                  /**< 退出信号 */
 
-    volatile int request_full;   /**< 请求缓冲区是否已满 */
-    volatile int response_full;  /**< 响应缓冲区是否已满 */
-    char *request;     /**< 请求 */
-    char *response;    /**< 响应 */
+    volatile int request_full;   /**< 请求缓冲区是否已满 (线程间同步标志) */
+    volatile int response_full;  /**< 响应缓冲区是否已满 (线程间同步标志) */
+    char *request;     /**< 请求缓冲区 (由 ubus 线程写入, MQTT 线程读取) */
+    char *response;    /**< 响应缓冲区 (由 MQTT 线程写入, ubus 线程读取) */
 };
 
 /**
