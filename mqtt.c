@@ -1,19 +1,39 @@
+/**
+ * @file mqtt.c
+ * @brief MQTT client implementation for iot-ubusd
+ * 
+ * This file implements the MQTT client functionality for communication
+ * between ubus and iot-rpcd through MQTT messages.
+ */
+
 #include <iot/mongoose.h>
 #include <iot/iot.h>
 #include "ubusd.h"
 
+/* MQTT topic for publishing requests to iot-rpcd */
 #define IOT_UBUSD_PUB_TOPIC "mg/iot-ubusd/channel/iot-rpcd"
+/* MQTT topic for subscribing to responses */
 #define IOT_UBUSD_SUB_TOPIC "mg/iot-ubusd/channel"
 
+/**
+ * @brief MQTT connection open event handler
+ */
 static void mqtt_ev_open_cb(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
     MG_INFO(("mqtt client connection created"));
 }
 
+/**
+ * @brief MQTT connection error event handler
+ */
 static void mqtt_ev_error_cb(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
     MG_ERROR(("%p %s", c->fd, (char *) ev_data));
     c->is_closing = 1;
 }
 
+/**
+ * @brief MQTT connection poll event handler
+ * Handles periodic tasks: timeout checking and sending pending requests
+ */
 static void mqtt_ev_poll_cb(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
 
     struct ubusd_private *priv = (struct ubusd_private*)c->mgr->userdata;
@@ -23,8 +43,8 @@ static void mqtt_ev_poll_cb(struct mg_connection *c, int ev, void *ev_data, void
     uint64_t now = mg_millis();
 
     if (priv->pong_active && now > priv->pong_active &&
-        now - priv->pong_active > (priv->cfg.opts->mqtt_keepalive + 3)*1000) { //TODO
-        MG_INFO(("mqtt client connction timeout"));
+        now - priv->pong_active > (priv->cfg.opts->mqtt_keepalive + 3)*1000) {
+        MG_INFO(("mqtt client connection timeout"));
         c->is_draining = 1;
     }
 
@@ -43,6 +63,9 @@ static void mqtt_ev_poll_cb(struct mg_connection *c, int ev, void *ev_data, void
 
 }
 
+/**
+ * @brief MQTT connection close event handler
+ */
 static void mqtt_ev_close_cb(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
 
     struct ubusd_private *priv = (struct ubusd_private*)c->mgr->userdata;
@@ -52,6 +75,10 @@ static void mqtt_ev_close_cb(struct mg_connection *c, int ev, void *ev_data, voi
 }
 
 
+/**
+ * @brief MQTT connection established event handler
+ * Subscribe to the response topic after connection is established
+ */
 static void mqtt_ev_mqtt_open_cb(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
 
     struct mg_str subt = mg_str(IOT_UBUSD_SUB_TOPIC);
@@ -67,6 +94,10 @@ static void mqtt_ev_mqtt_open_cb(struct mg_connection *c, int ev, void *ev_data,
 
 }
 
+/**
+ * @brief MQTT command event handler
+ * Track PINGRESP messages for keepalive monitoring
+ */
 static void mqtt_ev_mqtt_cmd_cb(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
 
     struct mg_mqtt_message *mm = (struct mg_mqtt_message *) ev_data;
@@ -77,6 +108,10 @@ static void mqtt_ev_mqtt_cmd_cb(struct mg_connection *c, int ev, void *ev_data, 
     }
 }
 
+/**
+ * @brief MQTT message received event handler
+ * Store the received response from iot-rpcd for the waiting ubus handler
+ */
 static void mqtt_ev_mqtt_msg_cb(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
 
     struct mg_mqtt_message *mm = (struct mg_mqtt_message *) ev_data;
@@ -85,14 +120,20 @@ static void mqtt_ev_mqtt_msg_cb(struct mg_connection *c, int ev, void *ev_data, 
     MG_DEBUG(("received %.*s <- %.*s", (int) mm->data.len, mm->data.ptr,
         (int) mm->topic.len, mm->topic.ptr));
 
-    // handle msg
+    // handle msg - store response if buffer is available
     if ( !priv->response_full ) {
         priv->response = mg_mprintf("%.*s", (int) mm->data.len, mm->data.ptr);
-        __sync_synchronize();
-        priv->response_full = 1;
+        if (priv->response) {
+            __sync_synchronize();
+            priv->response_full = 1;
+        }
     }
 }
 
+/**
+ * @brief Main MQTT event handler callback
+ * Dispatches events to specific handler functions
+ */
 static void mqtt_cb(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
 
     switch (ev) {
@@ -127,7 +168,14 @@ static void mqtt_cb(struct mg_connection *c, int ev, void *ev_data, void *fn_dat
 }
 
 
-// Timer function - recreate client connection if it is closed
+/**
+ * @brief Timer callback function for MQTT connection management
+ * 
+ * This function:
+ * 1. Recreates MQTT connection if it was closed
+ * 2. Sends periodic PING messages for keepalive
+ * 3. Handles system time changes
+ */
 void timer_mqtt_fn(void *arg) {
     struct mg_mgr *mgr = (struct mg_mgr *)arg;
     struct ubusd_private *priv = (struct ubusd_private*)mgr->userdata;

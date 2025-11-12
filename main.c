@@ -50,20 +50,26 @@ static void parse_args(int argc, char *argv[], struct ubusd_option *opts) {
     // Parse command-line flags
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-s") == 0) {
-            opts->mqtt_serve_address = argv[++i];
+            if (++i >= argc) usage(argv[0], opts);
+            opts->mqtt_serve_address = argv[i];
         } else if (strcmp(argv[i], "-a") == 0) {
-            opts->mqtt_keepalive = atoi(argv[++i]);
+            if (++i >= argc) usage(argv[0], opts);
+            opts->mqtt_keepalive = atoi(argv[i]);
             if (opts->mqtt_keepalive < 6) {
                 opts->mqtt_keepalive = 6;
             }
         } else if (strcmp(argv[i], "-v") == 0) {
-            opts->debug_level = atoi(argv[++i]);
+            if (++i >= argc) usage(argv[0], opts);
+            opts->debug_level = atoi(argv[i]);
         } else if( strcmp(argv[i], "-c") == 0) {
-            opts->ubus_obj_cfg_file = argv[++i];
+            if (++i >= argc) usage(argv[0], opts);
+            opts->ubus_obj_cfg_file = argv[i];
         } else if( strcmp(argv[i], "-m") == 0) {
-            opts->module = argv[++i];
+            if (++i >= argc) usage(argv[0], opts);
+            opts->module = argv[i];
         } else if( strcmp(argv[i], "-f") == 0) {
-            opts->func = argv[++i];
+            if (++i >= argc) usage(argv[0], opts);
+            opts->func = argv[i];
         } else {
             usage(argv[0], opts);
         }

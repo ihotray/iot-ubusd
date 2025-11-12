@@ -20,6 +20,11 @@
 #include <iot/iot.h>
 #include "ubusd.h"
 
+/* Request timeout: 10 seconds = 1000 iterations * 10ms */
+#define REQUEST_TIMEOUT_ITERATIONS 1000
+#define REQUEST_TIMEOUT_USLEEP 10000
+#define REQUEST_WAIT_USLEEP 1000
+
 struct ubus_object_ext {
     struct ubus_object obj;
     void *priv;
@@ -67,6 +72,11 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
     if (json_msg) {
         if (strcmp(obj->name, "iot-ubusd") != 0 || strcmp(method, "iot-rpc") != 0) { // not iot-rpc
             cJSON *root = cJSON_CreateObject();
+            if (!root) {
+                free(json_msg);
+                response = "{\"code\": -1, \"msg\": \"memory allocation failed\"}\n";
+                goto send_reply;
+            }
             cJSON_AddStringToObject(root, FIELD_METHOD, "call");
 
             cJSON *param = cJSON_CreateArray();
@@ -77,6 +87,10 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
             cJSON_AddItemToObject(args, "object", cJSON_CreateString(obj->name));
             cJSON_AddItemToObject(args, "method", cJSON_CreateString(method));
             cJSON *data_obj = cJSON_Parse(json_msg);
+            if (!data_obj) {
+                // If parsing fails, use an empty object
+                data_obj = cJSON_CreateObject();
+            }
             cJSON_AddItemToObject(args, FIELD_DATA, data_obj);
             cJSON_AddItemToArray(param, args);
 
@@ -86,7 +100,7 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
             cJSON_Delete(root);
         }
         while ( priv->request_full && priv->signo == 0 ) {
-            usleep(1000);
+            usleep(REQUEST_WAIT_USLEEP);
         }
 
         if ( priv->response_full ) { // clear unhandled response
@@ -98,18 +112,28 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
 
         if ( !priv->request_full ) {
             priv->request = strdup(json_msg);
+            if (!priv->request) {
+                free(json_msg);
+                response = "{\"code\": -1, \"msg\": \"memory allocation failed\"}\n";
+                goto send_reply;
+            }
             __sync_synchronize();
             priv->request_full = 1;
         }
 
-        // TIMEOUT, 10S, 1000*10ms
+        // TIMEOUT, 10S, REQUEST_TIMEOUT_ITERATIONS*REQUEST_TIMEOUT_USLEEP
         int try = 0;
-        while ( !priv->response_full && try++ < 1000 && priv->signo == 0 ) {
-            usleep(10000);
+        while ( !priv->response_full && try++ < REQUEST_TIMEOUT_ITERATIONS && priv->signo == 0 ) {
+            usleep(REQUEST_TIMEOUT_USLEEP);
         }
 
         if ( priv->response_full ) {
             out = strdup(priv->response);
+            if (!out) {
+                free(json_msg);
+                response = "{\"code\": -1, \"msg\": \"memory allocation failed\"}\n";
+                goto send_reply;
+            }
             free(priv->response);
             priv->response = NULL;
             __sync_synchronize();
@@ -122,6 +146,7 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
         response = out;
     }
 
+send_reply:
     memset(&bb, 0, sizeof(bb));
     blob_buf_init(&bb, 0);
 
@@ -151,7 +176,10 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
  * @param type 类型字符串
  * @return blobmsg类型枚举值
  */
-static int blogmsg_type(const char *type) {
+static int blobmsg_type_from_string(const char *type) {
+    if (!type) {
+        return BLOBMSG_TYPE_UNSPEC;
+    }
     if (strcmp(type, "BLOBMSG_TYPE_STRING") == 0) {
         return BLOBMSG_TYPE_STRING;
     } else if (strcmp(type, "BLOBMSG_TYPE_INT32") == 0) {
@@ -198,15 +226,18 @@ static int add_methods(struct ubus_object *obj, cJSON *method) {
         int n_policy = cJSON_GetArraySize(param);
         if (n_policy > 0) {
             policy = calloc(n_policy, sizeof(struct blobmsg_policy));
-            if (!policy)
+            if (!policy) {
+                // Free previously allocated ubus_methods before returning
+                free(ubus_methods);
                 return -ENOMEM;
+            }
             int i = 0;
             cJSON *param_item = NULL;
             cJSON_ArrayForEach(param_item, param) {
                 cJSON *type = cJSON_GetObjectItem(param_item, "type");
                 cJSON *name = cJSON_GetObjectItem(param_item, "name");
                 if (cJSON_IsString(type) && cJSON_IsString(name)) {
-                    policy[i].type = blogmsg_type(cJSON_GetStringValue(type));
+                    policy[i].type = blobmsg_type_from_string(cJSON_GetStringValue(type));
                     policy[i].name = cJSON_GetStringValue(name);
                 }
                 i++;
@@ -289,10 +320,15 @@ static void add_objects(void *handle) {
     size_t file_size = 0;
     priv->fs->st(priv->cfg.opts->ubus_obj_cfg_file, &file_size, NULL);
     size_t align_file_size = ((file_size + 1) / 64 + 1) * 64; //align 64 bytes
-    MG_INFO(("load config file: %s, size: %d(%d)", priv->cfg.opts->ubus_obj_cfg_file, file_size, align_file_size));
+    MG_INFO(("load config file: %s, size: %zu(%zu)", priv->cfg.opts->ubus_obj_cfg_file, file_size, align_file_size));
     void *fp = priv->fs->op(priv->cfg.opts->ubus_obj_cfg_file, MG_FS_READ);
     if (fp) {
         char *buf = calloc(1, align_file_size);
+        if (!buf) {
+            MG_ERROR(("memory allocation failed for config file buffer"));
+            priv->fs->cl(fp);
+            return;
+        }
         size_t size = priv->fs->rd(fp, buf, align_file_size - 1);
         cJSON *root = cJSON_ParseWithLength(buf, size);
         if (root && cJSON_IsArray(root)) {
@@ -301,7 +337,10 @@ static void add_objects(void *handle) {
                 cJSON *object = cJSON_GetObjectItem(item, "object");
                 cJSON *method = cJSON_GetObjectItem(item, "method");
                 if (object && cJSON_IsString(object) && method && cJSON_IsArray(method)) {
-                    add_object(handle, cJSON_GetStringValue(object), add_methods, method);
+                    int ret = add_object(handle, cJSON_GetStringValue(object), add_methods, method);
+                    if (ret != 0) {
+                        MG_ERROR(("failed to add object: %s, error: %d", cJSON_GetStringValue(object), ret));
+                    }
                 } else {
                     MG_ERROR(("config file %s format is wrong", priv->cfg.opts->ubus_obj_cfg_file));
                 }
@@ -320,6 +359,14 @@ static void add_objects(void *handle) {
     }
 }
 
+/**
+ * @brief Start a detached thread
+ * @param f Thread function
+ * @param p Thread parameter
+ * 
+ * Note: Error handling for pthread_create is minimal.
+ * In production code, consider checking return values.
+ */
 static void start_thread(void *(*f)(void *), void *p) {
 #ifdef _WIN32
 #define usleep(x) Sleep((x) / 1000)
@@ -336,6 +383,14 @@ static void start_thread(void *(*f)(void *), void *p) {
 }
 
 void timer_mqtt_fn(void *arg);
+/**
+ * @brief Manager thread function for MQTT handling
+ * @param param Pointer to ubusd_private structure
+ * @return NULL
+ * 
+ * This thread runs the mongoose event loop for MQTT communication.
+ * It runs until signo is set by signal handler.
+ */
 static void *mgr_thread(void *param) {
     struct ubusd_private *priv = (struct ubusd_private *)param;
     int timer_opts = MG_TIMER_REPEAT | MG_TIMER_RUN_NOW;
@@ -420,8 +475,24 @@ void ubusd_run() {
  */
 void ubusd_exit(void *handle) {
     struct ubusd_private *priv = (struct ubusd_private *)handle;
+    
+    // Clean up any pending request/response buffers
+    if (priv->request) {
+        free(priv->request);
+        priv->request = NULL;
+    }
+    if (priv->response) {
+        free(priv->response);
+        priv->response = NULL;
+    }
+    
+    // Clean up mongoose manager
+    mg_mgr_free(&priv->mgr);
+    
+    // ubus_free() will clean up all registered objects and their associated memory
     ubus_free(priv->ubus_ctx);
     uloop_done();
+    
     if (priv->cfg.ubus_object_json)
         cJSON_Delete(priv->cfg.ubus_object_json);
 
