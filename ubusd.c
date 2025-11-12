@@ -20,6 +20,11 @@
 #include <iot/iot.h>
 #include "ubusd.h"
 
+/* Request timeout: 10 seconds = 1000 iterations * 10ms */
+#define REQUEST_TIMEOUT_ITERATIONS 1000
+#define REQUEST_TIMEOUT_USLEEP 10000
+#define REQUEST_WAIT_USLEEP 1000
+
 struct ubus_object_ext {
     struct ubus_object obj;
     void *priv;
@@ -67,6 +72,11 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
     if (json_msg) {
         if (strcmp(obj->name, "iot-ubusd") != 0 || strcmp(method, "iot-rpc") != 0) { // not iot-rpc
             cJSON *root = cJSON_CreateObject();
+            if (!root) {
+                free(json_msg);
+                response = "{\"code\": -1, \"msg\": \"memory allocation failed\"}\n";
+                goto send_reply;
+            }
             cJSON_AddStringToObject(root, FIELD_METHOD, "call");
 
             cJSON *param = cJSON_CreateArray();
@@ -77,6 +87,10 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
             cJSON_AddItemToObject(args, "object", cJSON_CreateString(obj->name));
             cJSON_AddItemToObject(args, "method", cJSON_CreateString(method));
             cJSON *data_obj = cJSON_Parse(json_msg);
+            if (!data_obj) {
+                // If parsing fails, use an empty object
+                data_obj = cJSON_CreateObject();
+            }
             cJSON_AddItemToObject(args, FIELD_DATA, data_obj);
             cJSON_AddItemToArray(param, args);
 
@@ -86,7 +100,7 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
             cJSON_Delete(root);
         }
         while ( priv->request_full && priv->signo == 0 ) {
-            usleep(1000);
+            usleep(REQUEST_WAIT_USLEEP);
         }
 
         if ( priv->response_full ) { // clear unhandled response
@@ -98,18 +112,28 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
 
         if ( !priv->request_full ) {
             priv->request = strdup(json_msg);
+            if (!priv->request) {
+                free(json_msg);
+                response = "{\"code\": -1, \"msg\": \"memory allocation failed\"}\n";
+                goto send_reply;
+            }
             __sync_synchronize();
             priv->request_full = 1;
         }
 
-        // TIMEOUT, 10S, 1000*10ms
+        // TIMEOUT, 10S, REQUEST_TIMEOUT_ITERATIONS*REQUEST_TIMEOUT_USLEEP
         int try = 0;
-        while ( !priv->response_full && try++ < 1000 && priv->signo == 0 ) {
-            usleep(10000);
+        while ( !priv->response_full && try++ < REQUEST_TIMEOUT_ITERATIONS && priv->signo == 0 ) {
+            usleep(REQUEST_TIMEOUT_USLEEP);
         }
 
         if ( priv->response_full ) {
             out = strdup(priv->response);
+            if (!out) {
+                free(json_msg);
+                response = "{\"code\": -1, \"msg\": \"memory allocation failed\"}\n";
+                goto send_reply;
+            }
             free(priv->response);
             priv->response = NULL;
             __sync_synchronize();
@@ -122,6 +146,7 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
         response = out;
     }
 
+send_reply:
     memset(&bb, 0, sizeof(bb));
     blob_buf_init(&bb, 0);
 
@@ -151,7 +176,7 @@ static int ubus_handler(struct ubus_context *ctx, struct ubus_object *obj,
  * @param type 类型字符串
  * @return blobmsg类型枚举值
  */
-static int blogmsg_type(const char *type) {
+static int blobmsg_type(const char *type) {
     if (strcmp(type, "BLOBMSG_TYPE_STRING") == 0) {
         return BLOBMSG_TYPE_STRING;
     } else if (strcmp(type, "BLOBMSG_TYPE_INT32") == 0) {
@@ -198,15 +223,18 @@ static int add_methods(struct ubus_object *obj, cJSON *method) {
         int n_policy = cJSON_GetArraySize(param);
         if (n_policy > 0) {
             policy = calloc(n_policy, sizeof(struct blobmsg_policy));
-            if (!policy)
+            if (!policy) {
+                // Free previously allocated ubus_methods before returning
+                free(ubus_methods);
                 return -ENOMEM;
+            }
             int i = 0;
             cJSON *param_item = NULL;
             cJSON_ArrayForEach(param_item, param) {
                 cJSON *type = cJSON_GetObjectItem(param_item, "type");
                 cJSON *name = cJSON_GetObjectItem(param_item, "name");
                 if (cJSON_IsString(type) && cJSON_IsString(name)) {
-                    policy[i].type = blogmsg_type(cJSON_GetStringValue(type));
+                    policy[i].type = blobmsg_type(cJSON_GetStringValue(type));
                     policy[i].name = cJSON_GetStringValue(name);
                 }
                 i++;

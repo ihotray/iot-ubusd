@@ -88,8 +88,10 @@ static void mqtt_ev_mqtt_msg_cb(struct mg_connection *c, int ev, void *ev_data, 
     // handle msg
     if ( !priv->response_full ) {
         priv->response = mg_mprintf("%.*s", (int) mm->data.len, mm->data.ptr);
-        __sync_synchronize();
-        priv->response_full = 1;
+        if (priv->response) {
+            __sync_synchronize();
+            priv->response_full = 1;
+        }
     }
 }
 
